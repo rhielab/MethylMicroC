@@ -1,0 +1,300 @@
+diff --color -urN -x .git bisulfitehic_clean/bisulfitehicMap bisulfitehic_modified_code/bisulfitehicMap
+--- bisulfitehic_clean/bisulfitehicMap	2025-01-23 15:04:20.367760975 -0800
++++ bisulfitehic_modified_code/bisulfitehicMap	2025-03-06 16:47:46.405646017 -0800
+@@ -3,8 +3,10 @@
+ ## author: Yaping Liu  lyping1986@gmail.com
+ 
+ use strict;
+-use Getopt::Long;
++use Getopt::Long qw(:config pass_through); # allow unknown arguments to be passed through to Bhmem
++use Getopt::Long qw(GetOptions);
+ use File::Basename;
++use Cwd 'abs_path';
+ 
+ sub usage {
+ 
+@@ -25,6 +27,7 @@
+  	print STDERR "  ---clip3 NUM: bp at 5' end to clip.(Default: 0)\n\n";
+  	print STDERR "  --rgId STR: readgroup ID to add.(Default: null)\n\n";
+  	print STDERR "  --rgSm STR: readgroup SM to add.(Default: null)\n\n";
++	print STDERR " Extra arguments will be passed to Bhmem unmodified.\n\n";
+  	
+  	 exit(1);
+ }
+@@ -44,6 +47,16 @@
+ print STDERR "bisulfitehicMap ";
+ my $cmd_root=join " ", @ARGV;
+ print STDERR "$cmd_root\n\n";
++usage() if ( scalar(@ARGV) == 0 );
++
++if ( scalar(@ARGV) < 4 ) {
++    print STDERR "Wrong number of arguments\n";
++    usage();
++}
++my $genome=shift(@ARGV);
++my $output=shift(@ARGV);
++my $r1=shift(@ARGV);
++my $r2=shift(@ARGV);
+ 
+ GetOptions( 
+ 			"cpu=i" => \$cpu,
+@@ -57,21 +70,11 @@
+ 			
+ );
+ 
+-usage() if ( scalar(@ARGV) == 0 );
+-
+-if ( scalar(@ARGV) < 4 ) {
+-    print STDERR "Wrong number of arguments\n";
+-    usage();
+-}
+-my $genome=$ARGV[0];
+-my $output=$ARGV[1];
+-my $r1=$ARGV[2];
+-my $r2=$ARGV[3];
+-
+ my $cmd = "java -Xmx${mem}G -Djava.library.path=${bisulfitehic_path}/jbwa/jbwa-1.0.0/src/main/native/ -cp \"${bisulfitehic_path}/target/bisulfitehic-default.jar:${bisulfitehic_path}/jbwa/jbwa-1.0.0/jbwa.jar\" main.java.edu.mit.compbio.bisulfitehic.mapping.Bhmem ";
+ #my $cmd = "java -Xmx${mem}G -Djava.library.path=${bisulfitehic_path}/jbwa/src/main/native/ -cp \"${bisulfitehic_path}/target/bisulfitehic-0.02-jar-with-dependencies.jar:${bisulfitehic_path}/jbwa/jbwa-1.0.0/jbwa.jar\" main.java.edu.mit.compbio.bisulfitehic.mapping.Bhmem ";
++my $extraArgs = join ' ', @ARGV; # known options will be removed from it by GetOptions
+ 
+-$cmd.="$genome $output $r1 $r2 -t $cpu -score $score -buffer $buffer -clip5 $clip5 -clip3 $clip3 ";
++$cmd.="$genome $output $r1 $r2 -t $cpu -score $score -buffer $buffer -clip5 $clip5 -clip3 $clip3 $extraArgs ";
+ if($rgId ne "" and $rgSm ne ""){
+ 	$cmd.="-rgId $rgId -rgSm $rgSm ";
+ }
+diff --color -urN -x .git bisulfitehic_clean/src/main/java/edu/mit/compbio/bisulfitehic/mapping/Bhmem.java bisulfitehic_modified_code/src/main/java/edu/mit/compbio/bisulfitehic/mapping/Bhmem.java
+--- bisulfitehic_clean/src/main/java/edu/mit/compbio/bisulfitehic/mapping/Bhmem.java	2025-01-23 15:04:21.091767558 -0800
++++ bisulfitehic_modified_code/src/main/java/edu/mit/compbio/bisulfitehic/mapping/Bhmem.java	2025-03-06 16:46:28.780832519 -0800
+@@ -30,6 +30,8 @@
+ import java.util.zip.GZIPInputStream;
+ 
+ import main.java.edu.mit.compbio.bisulfitehic.utils.BisulfiteHicUtils;
++import main.java.edu.mit.compbio.bisulfitehic.utils.BisulfiteHicUtils.BooleanOption;
++import static main.java.edu.mit.compbio.bisulfitehic.utils.BisulfiteHicUtils.BooleanOption.*;
+ 
+ import org.apache.commons.lang3.ArrayUtils;
+ import org.apache.commons.math3.util.Pair;
+@@ -71,11 +73,17 @@
+ 	@Option(name="-nonDirectional",usage="noDirectional protocol. default: false")
+ 	public boolean noDirectional = false;
+ 	
+-	@Option(name="-forceSameChr",usage="force to look at pairs within the same chr. default: false")
+-	public boolean forceSameChr = false;
++	@Option(name="-outputCisReads",usage="output mapping pairs within the same chr. default: yes")
++	public BooleanOption outputCisReads = yes;
+ 
+-	@Option(name="-outputMateDiffChr",usage="output mapping pairs mapped in different chrs. default: false")
+-	public boolean outputMateDiffChr = false;
++	@Option(name="-outputTransReads",usage="output mapping pairs mapped in different chrs. default: yes")
++	public BooleanOption outputTransReads = yes;
++
++	@Option(name="-separateCisAndTransReads",usage="output cis and trans reads to different files with suffix _cis_reads and _trans_reads (implies outputCisReads and outputTransReads). default: disabled")
++	public boolean separateCisAndTransReads = false;
++
++	@Option(name="-alsoOutputMergedBam",usage="if using -separateCisAndTransReads, also output a merged bam. default: disabled",depends={"-separateCisAndTransReads"})
++	public boolean alsoOutputMergedBam = false;
+ 	
+ 	@Option(name="-enzymeList",usage="bed file about the location of restriction enzyme.it will be used to assist mapping also. Strongly recommmend to use it for scMethylHiC default: null")
+ 	public String enzymeList = null;
+@@ -107,10 +115,21 @@
+ 	private static long startTime = -1;
+ 	private static long totalReads = 0L;
+ 	private static long mappedReads = 0L;
++	private static long mappedCisReads = 0L;
++	private static long mappedTransReads = 0L;
+ 	//private final static String ORIGINAL_SEQ_TAG = "OS";
+ 	private final static String MISMATCHES = "NM";
+ 	private final static String ALIGNMENT_SCORE = "AS";
+ 	private static List<SamPairUtil.PairOrientation> ORITATION;
++
++	private static String addFilenameSuffixKeepingExtension(String path, String suffix) {
++		int lastDot = path.lastIndexOf('.');
++		if(lastDot > 0 && lastDot > path.lastIndexOf('/') && lastDot > path.lastIndexOf(File.separator)) { /* not abc.def/something */
++			return path.substring(0, lastDot) + suffix + path.substring(lastDot);
++		} else {
++			return path + suffix;
++		}
++	}
+ 	
+ 	/**
+ 	 * @param args
+@@ -133,6 +152,8 @@
+ 						if(help || args.length < 4) throw new CmdLineException(parser, USAGE, new Throwable());
+ 						parser.parseArgument(args);
+ 						
++						if (outputTransReads == no && outputCisReads == no)
++							throw new CmdLineException(parser, USAGE+"\nError: you must include at least one of cis or trans reads", new Throwable());
+ 					
+ 					}
+ 					catch (CmdLineException e)
+@@ -219,7 +240,18 @@
+ 					}
+ 					
+ 					SAMFileWriterFactory writerFactory = new SAMFileWriterFactory();
+-					SAMFileWriter writer = writerFactory.makeBAMWriter(samFileHeader, true, new File(outputFile));
++					SAMFileWriter writer = null;
++					SAMFileWriter writerCis = null;
++					SAMFileWriter writerTrans = null;
++					if (separateCisAndTransReads) {
++						outputCisReads = yes;
++						outputTransReads = yes;
++						writerCis = writerFactory.makeBAMWriter(samFileHeader, true, new File(addFilenameSuffixKeepingExtension(outputFile, "_cis_reads")));
++						writerTrans = writerFactory.makeBAMWriter(samFileHeader, true, new File(addFilenameSuffixKeepingExtension(outputFile, "_trans_reads")));
++					}
++					if (!separateCisAndTransReads || alsoOutputMergedBam) {
++						writer = writerFactory.makeBAMWriter(samFileHeader, true, new File(outputFile));
++					}
+ 					
+ 					BwaIndex indexCT=new BwaIndex(new File(new File(refFile).getParent() + "/Bisulfite_Genome/CT_conversion/genome_mfa.CT_conversion.fa"));
+ 					BwaMem memCT=new BwaMem(indexCT);
+@@ -252,8 +284,27 @@
+ 								String[] samsEnd2GA = pbat ? memCT.align(L2GA) : memGA.align(L2GA);
+ 								HashMap<String, Pair<SAMRecord, SAMRecord>> bestPairs = joinTwoEnds(samsEnd1CT, samsEnd1GA, samsEnd2CT, samsEnd2GA, samFileHeader, L1, L2, regionsEnzyme) ;
+ 								for(Pair<SAMRecord, SAMRecord> pair : bestPairs.values()){
+-									writer.addAlignment(pair.getFirst());
+-									writer.addAlignment(pair.getSecond());
++									boolean isCis = (pair.getFirst().getReferenceName().equals(pair.getSecond().getReferenceName()));
++									if ((outputCisReads == no && isCis) || (outputTransReads == no && !isCis))
++										continue;
++									if (separateCisAndTransReads) {
++										if (isCis) {
++											writerCis.addAlignment(pair.getFirst());
++											writerCis.addAlignment(pair.getSecond());
++										} else {
++											writerTrans.addAlignment(pair.getFirst());
++											writerTrans.addAlignment(pair.getSecond());
++										}
++									}
++									if (!separateCisAndTransReads || alsoOutputMergedBam) {
++										writer.addAlignment(pair.getFirst());
++										writer.addAlignment(pair.getSecond());
++									}
++									if (isCis) {
++										mappedCisReads+=2;
++									} else {
++										mappedTransReads+=2;
++									}
+ 									mappedReads+=2;
+ 								}
+ 							}
+@@ -281,7 +332,7 @@
+ 						totalReads+=2;
+ 						if(totalReads % buffer == 0){
+ 							log.info("Processing reads " + totalReads + " ...");
+-							log.info("Unique mapped and paired reads " + mappedReads + " ...");
++							log.info("Unique mapped and paired reads " + mappedReads + " (" + mappedCisReads + " cis/" + mappedTransReads + " trans) ...");
+ 							
+ 						}
+ 						
+@@ -292,7 +343,13 @@
+ 					memCT.dispose();
+ 					indexGA.close();
+ 					memGA.dispose();
+-					writer.close();
++					if (separateCisAndTransReads) {
++						writerCis.close();
++						writerTrans.close();
++					}
++					if (!separateCisAndTransReads || alsoOutputMergedBam) {
++						writer.close();
++					}
+ 					
+ 					finish();
+ 	}
+@@ -310,7 +367,7 @@
+ 		for(int i = 0; i < samsEnd1CT.length; i++){
+ 			for(SAMRecord r : String2SamRecord(samsEnd1CT[i], samFileHeader, L1.get(i), false)){
+ 				if(!failFlagFilter(r)){
+-					String key = forceSameChr ? (r.getReadName() + "\t" + r.getReferenceName()) : r.getReadName();
++					String key = r.getReadName();
+ 					if(samsEnd1CTHash.containsKey(key)){
+ 						samsEnd1CTHash.put(key, comparingSamRecord(samsEnd1CTHash.get(key), r));
+ 					}else{
+@@ -323,7 +380,7 @@
+ 		for(int i = 0; i < samsEnd1GA.length; i++){
+ 			for(SAMRecord r : String2SamRecord(samsEnd1GA[i], samFileHeader, L1.get(i), false)){
+ 				if(!failFlagFilter(r)){
+-					String key = forceSameChr ? (r.getReadName() + "\t" + r.getReferenceName()) : r.getReadName();
++					String key = r.getReadName();
+ 					if(samsEnd1GAHash.containsKey(key)){
+ 						samsEnd1GAHash.put(key, comparingSamRecord(samsEnd1GAHash.get(key), r));
+ 					}else{
+@@ -336,7 +393,7 @@
+ 		for(int i = 0; i < samsEnd2CT.length; i++){
+ 			for(SAMRecord r : String2SamRecord(samsEnd2CT[i], samFileHeader, L2.get(i), true)){
+ 				if(!failFlagFilter(r)){
+-					String key = forceSameChr ? (r.getReadName() + "\t" + r.getReferenceName()) : r.getReadName();
++					String key = r.getReadName();
+ 					if(samsEnd2CTHash.containsKey(key)){
+ 						samsEnd2CTHash.put(key, comparingSamRecord(samsEnd2CTHash.get(key), r));
+ 					}else{
+@@ -349,7 +406,7 @@
+ 		for(int i = 0; i < samsEnd2GA.length; i++){
+ 			for(SAMRecord r : String2SamRecord(samsEnd2GA[i], samFileHeader, L2.get(i), true)){
+ 				if(!failFlagFilter(r)){
+-					String key = forceSameChr ? (r.getReadName() + "\t" + r.getReferenceName()) : r.getReadName();
++					String key = r.getReadName();
+ 					if(samsEnd2GAHash.containsKey(key)){
+ 						samsEnd2GAHash.put(key, comparingSamRecord(samsEnd2GAHash.get(key), r));
+ 					}else{
+@@ -422,7 +479,7 @@
+ 		for(int i = 0; i < samsEnd1CT.length; i++){
+ 			for(SAMRecord r : String2SamRecord(samsEnd1CT[i], samFileHeader, L1.get(i), false)){
+ 				if(!failFlagFilter(r)){
+-					String key = forceSameChr ? (r.getReadName() + "\t" + r.getReferenceName()) : r.getReadName();
++					String key = r.getReadName();
+ 					
+ 					if(samsEnd1CTHash.containsKey(key)){
+ 						ArrayList<SAMRecord> newCollection = samsEnd1CTHash.get(key);
+@@ -440,7 +497,7 @@
+ 		for(int i = 0; i < samsEnd1GA.length; i++){
+ 			for(SAMRecord r : String2SamRecord(samsEnd1GA[i], samFileHeader, L1.get(i), false)){
+ 				if(!failFlagFilter(r)){
+-					String key = forceSameChr ? (r.getReadName() + "\t" + r.getReferenceName()) : r.getReadName();
++					String key = r.getReadName();
+ 					if(samsEnd1GAHash.containsKey(key)){
+ 						ArrayList<SAMRecord> newCollection = samsEnd1GAHash.get(key);
+ 						newCollection.add(r);
+@@ -458,7 +515,7 @@
+ 		for(int i = 0; i < samsEnd2CT.length; i++){
+ 			for(SAMRecord r : String2SamRecord(samsEnd2CT[i], samFileHeader, L2.get(i), true)){
+ 				if(!failFlagFilter(r)){
+-					String key = forceSameChr ? (r.getReadName() + "\t" + r.getReferenceName()) : r.getReadName();
++					String key = r.getReadName();
+ 					if(samsEnd2CTHash.containsKey(key)){
+ 						ArrayList<SAMRecord> newCollection = samsEnd2CTHash.get(key);
+ 						newCollection.add(r);
+@@ -475,7 +532,7 @@
+ 		for(int i = 0; i < samsEnd2GA.length; i++){
+ 			for(SAMRecord r : String2SamRecord(samsEnd2GA[i], samFileHeader, L2.get(i), true)){
+ 				if(!failFlagFilter(r)){
+-					String key = forceSameChr ? (r.getReadName() + "\t" + r.getReferenceName()) : r.getReadName();
++					String key = r.getReadName();
+ 					if(samsEnd2GAHash.containsKey(key)){
+ 						ArrayList<SAMRecord> newCollection = samsEnd2GAHash.get(key);
+ 						newCollection.add(r);
+@@ -583,13 +640,6 @@
+ 		for(String name : bestPairs.keySet()){
+ 			SAMRecord r1 = bestPairs.get(name).getFirst();
+ 			SAMRecord r2 = bestPairs.get(name).getSecond();
+-			if(!r1.getContig().equalsIgnoreCase(r2.getContig())){
+-				if(!outputMateDiffChr){
+-					
+-					continue;
+-				}
+-			}
+-			
+ 			//System.err.println(r1.getFlags() + "\t" + r1.getAlignmentStart() + "\t" + r1.getMateReferenceName() + "\t" + r1.getMateAlignmentStart() + "\t" + r1.getInferredInsertSize());
+ 			//System.err.println(r2.getFlags() + "\t" + r2.getAlignmentStart() + "\t" + r2.getMateReferenceName() + "\t" + r2.getMateAlignmentStart() + "\t" + r2.getInferredInsertSize());
+ 			SamPairUtil.setProperPairAndMateInfo(r1, r2, samFileHeader, ORITATION, true);
+diff --color -urN -x .git bisulfitehic_clean/src/main/java/edu/mit/compbio/bisulfitehic/utils/BisulfiteHicUtils.java bisulfitehic_modified_code/src/main/java/edu/mit/compbio/bisulfitehic/utils/BisulfiteHicUtils.java
+--- bisulfitehic_clean/src/main/java/edu/mit/compbio/bisulfitehic/utils/BisulfiteHicUtils.java	2025-01-23 15:04:21.091767558 -0800
++++ bisulfitehic_modified_code/src/main/java/edu/mit/compbio/bisulfitehic/utils/BisulfiteHicUtils.java	2025-03-06 16:07:35.982611890 -0800
+@@ -26,6 +26,7 @@
+  *
+  */
+ public class BisulfiteHicUtils {
++	public enum BooleanOption { no, yes }
+ 	
+ 	//it looks like Bhmem has some problem for the reads mapped to the negative strand... need to reverse it here...when in the future, this is correct in Bhmem, need to get rid of this reverse here
+ 	static public byte[] getClippedReadsBase(SAMRecord r){

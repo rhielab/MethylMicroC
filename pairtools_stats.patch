@@ -1,0 +1,37 @@
+--- pairtools_stats_orig.py	2025-03-09 20:26:09.356195123 -0700
++++ pairtools_stats.py	2025-03-09 20:28:15.349576127 -0700
+@@ -9,7 +9,7 @@
+ 
+ from collections import OrderedDict, Mapping
+ 
+-from . import _fileio, _pairsam_format, cli, _headerops, common_io_options
++from pairtools import _fileio, _pairsam_format, cli, _headerops, common_io_options
+ 
+ UTIL_NAME = 'pairtools_stats'
+ 
+@@ -177,6 +177,10 @@
+         self._stat['cis_10kb+'] = 0
+         self._stat['cis_20kb+'] = 0
+         self._stat['cis_40kb+'] = 0
++        self._stat['cis_50kb+'] = 0
++        self._stat['cis_100kb+'] = 0
++        self._stat['cis_500kb+'] = 0
++        self._stat['cis_1Mb+'] = 0
+ 
+         self._stat['chrom_freq'] = OrderedDict()
+ 
+@@ -395,6 +399,14 @@
+                         self._stat['cis_20kb+'] += 1
+                     if dist >= 40000:
+                         self._stat['cis_40kb+'] += 1
++                    if dist >= 50000:
++                        self._stat['cis_50kb+'] += 1
++                    if dist >= 100000:
++                        self._stat['cis_100kb+'] += 1
++                    if dist >= 500000:
++                        self._stat['cis_500kb+'] += 1
++                    if dist >= 1000000:
++                        self._stat['cis_1Mb+'] += 1
+ 
+                 else:
+                     self._stat['trans'] += 1
