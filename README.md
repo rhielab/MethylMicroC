@@ -1,5 +1,7 @@
 # Methyl-Micro-C data analysis
 
+**Zenodo archive:** [![DOI - click to view](https://zenodo.org/badge/850004056.svg)](https://doi.org/10.5281/zenodo.15320272)
+
 ## Citation
 
 Gonzalez-Smith et al. Methyl-Micro-C: Simultaneous characterization of chromatin accessibility, interaction, and DNA methylation.
